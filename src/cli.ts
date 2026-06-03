@@ -47,6 +47,8 @@ const RESET = tty ? "\x1b[0m" : "";
 interface Skill {
   name: string;
   dir: string; // absolute, resolved path to the skill directory
+  /** short description from the SKILL.md YAML frontmatter (if any) */
+  description?: string;
 }
 
 interface Row {
@@ -63,6 +65,8 @@ interface Row {
   linkPath: string;
   /** the link location is occupied by some symlink/file (maybe another source) */
   nameOccupied: boolean;
+  /** short description from the SKILL.md YAML frontmatter (if any) */
+  description?: string;
 }
 
 /** Expand a leading ~ to the user's home directory. */
@@ -140,6 +144,8 @@ interface SkillLeaf {
   /** absolute path to the skill dir */
   abs: string;
   depth: number;
+  /** short description from the SKILL.md YAML frontmatter (if any) */
+  description?: string;
 }
 
 /**
@@ -177,7 +183,13 @@ function buildTree(
         : rel.split(path.sep).filter((x) => x !== "");
 
     if (segments.length === 0) {
-      rootSkills.push({ kind: "skill", name: s.name, abs: s.dir, depth: 0 });
+      rootSkills.push({
+        kind: "skill",
+        name: s.name,
+        abs: s.dir,
+        depth: 0,
+        description: s.description,
+      });
       continue;
     }
 
@@ -198,6 +210,7 @@ function buildTree(
       name: s.name,
       abs: s.dir,
       depth: segments.length,
+      description: s.description,
     });
   }
 
@@ -247,6 +260,49 @@ function skillsInSubtree(node: FolderNode): string[] {
 }
 
 /**
+ * Extract the `description:` field from a SKILL.md YAML frontmatter block.
+ * Supports plain, single-, and double-quoted scalars plus simple folded
+ * (`>`) / literal (`|`) blocks. Returns undefined when absent or unreadable.
+ */
+function readSkillDescription(skillDir: string): string | undefined {
+  let content: string;
+  try {
+    content = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+  } catch {
+    return undefined;
+  }
+  // Frontmatter must start at the very top: --- ... ---
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content);
+  if (!m) return undefined;
+  const lines = m[1]!.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const km = /^description:\s*(.*)$/.exec(line);
+    if (!km) continue;
+    let val = km[1]!.trim();
+    // Block scalar (folded `>` or literal `|`): gather indented lines.
+    if (val === ">" || val === "|" || /^[>|][+-]?$/.test(val)) {
+      const parts: string[] = [];
+      for (let j = i + 1; j < lines.length; j++) {
+        const l = lines[j]!;
+        if (l.trim() !== "" && !/^\s/.test(l)) break; // dedent ends the block
+        parts.push(l.trim());
+      }
+      return parts.join(" ").trim() || undefined;
+    }
+    // Strip matching surrounding quotes.
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    return val.trim() || undefined;
+  }
+  return undefined;
+}
+
+/**
  * Return skills for every directory under root (within maxDepth) that
  * directly contains a SKILL.md. Skills are not nested inside skills, so we
  * stop descending once one is found.
@@ -266,7 +322,11 @@ function findSkills(root: string, maxDepth: number): Skill[] {
     // Is this directory itself a skill?
     const isSkill = entries.some((e) => e.name === "SKILL.md" && e.isFile());
     if (isSkill) {
-      found.push({ name: path.basename(dir), dir });
+      found.push({
+        name: path.basename(dir),
+        dir,
+        description: readSkillDescription(dir),
+      });
       return; // do not descend into a skill
     }
 
@@ -431,6 +491,7 @@ function makeRow(
   target: string,
   sourceRoot: string,
   collisionNames: Set<string>,
+  description?: string,
 ): Row {
   const linkPath = path.join(target, name);
   const linkedTo = currentLinkTargetResolved(linkPath);
@@ -444,6 +505,7 @@ function makeRow(
     isLinked,
     linkPath,
     nameOccupied,
+    description,
   };
 }
 
@@ -473,7 +535,7 @@ function buildItems(
     items.push({
       kind: "skill",
       depth: 0,
-      row: makeRow(s.abs, s.name, target, sourceRoot, collisionNames),
+      row: makeRow(s.abs, s.name, target, sourceRoot, collisionNames, s.description),
     });
   }
 
@@ -494,7 +556,7 @@ function buildItems(
       items.push({
         kind: "skill",
         depth: renderDepth + 1,
-        row: makeRow(s.abs, s.name, target, sourceRoot, collisionNames),
+        row: makeRow(s.abs, s.name, target, sourceRoot, collisionNames, s.description),
       });
     }
   };
@@ -874,10 +936,24 @@ async function runInteractive(
     //   header + help (2)
     //   + optional collision hint block (2: blank + hint)
     //   + scroll indicators (2: above + below, always reserved)
+    //   + blank + description panel (2)
     //   + blank + status (2)
     const header = `${BOLD}Skills  (target: ${target})${RESET}`;
     const help = `${DIM}\u2191/\u2193 move \u00b7 space toggle skill / disable folder \u00b7 enter/q quit${RESET}`;
     const hintLine = hint ?? "";
+
+    // Description of the highlighted skill, shown in a panel at the bottom.
+    const current = items[cursor];
+    const desc =
+      current && current.kind === "skill" ? current.row.description : undefined;
+    const descLine = desc
+      ? `${DIM}\u2500 ${RESET}${desc}`
+      : "";
+
+    // The description panel is always exempt from truncation: it wraps onto as
+    // many physical lines as it needs in either mode, so account for its real
+    // height regardless of `wrap`.
+    const descPanelLines = 1 /* blank */ + (desc ? physicalLines(descLine, cols) : 1);
 
     // In wrap mode the chrome lines can themselves wrap; account for that.
     const chromeLines =
@@ -886,8 +962,9 @@ async function runInteractive(
           physicalLines(help, cols) +
           (hint ? 1 + physicalLines(hintLine, cols) : 0) +
           2 /* up + down indicators */ +
+          descPanelLines +
           2 /* blank + status */
-        : 2 + (hint ? 2 : 0) + 2 + 2;
+        : 2 + (hint ? 2 : 0) + 2 + descPanelLines + 2;
     const budget = Math.max(1, termRows - chromeLines);
 
     // Determine which items are visible, keeping the cursor on-screen.
@@ -938,6 +1015,11 @@ async function runInteractive(
     const below = items.length - end;
     lines.push(below > 0 ? `${DIM}  \u2193 ${below} more${RESET}` : "");
     if (hint) lines.push("", fit(hintLine));
+    // Description panel for the highlighted skill. Always exempt from
+    // truncation so the full text wraps onto multiple lines; a blank line is
+    // reserved so the layout stays stable when moving onto a folder / a skill
+    // without a description.
+    lines.push("", descLine);
     lines.push("", fit(statusLine || " "));
     stdout.write(CLEAR_SCREEN + lines.join("\n") + "\n");
   };
