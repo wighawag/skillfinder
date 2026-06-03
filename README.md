@@ -19,7 +19,19 @@ toggle which ones are symlinked into a target directory (default
 - **Name collisions:** when the same skill name exists under multiple sources,
   each candidate is listed separately so you can pick exactly which version to
   link; selecting one re-points the link.
-- Toggle by number, `q` to quit. Links are plain symlinks (Unix assumed).
+- **Interactive keyboard UI** (when run in a terminal): `↑`/`↓` (or `j`/`k`) to
+  move, `space` to toggle the highlighted skill, `enter`/`q`/`Esc` to finish.
+  Links update **live** as you toggle. The list **scrolls** to keep the cursor
+  on-screen when there are more skills than terminal rows, showing `↑ N more` /
+  `↓ N more` indicators, and re-renders on terminal resize. When stdin is piped
+  (scripts/CI), it falls back to a numbered list you toggle by typing a number,
+  then `q`.
+- **Narrow terminals:** by default (`--truncate`) long lines are cut to the
+  terminal width with an ellipsis so each skill stays on one line and the
+  cursor never scrolls off-screen. Pass `--wrap` to let long lines wrap
+  instead; the viewport then budgets by physical lines so the cursor still
+  stays visible.
+- Links are plain symlinks (Unix assumed).
 
 ## Install
 
@@ -34,14 +46,16 @@ This exposes the `find-skills` command.
 ## Usage
 
 ```sh
-find-skills [SOURCE_ROOT] [--depth N] [--target DIR]
+find-skills [SOURCE_ROOT] [--depth N] [--target DIR] [--truncate|--wrap]
 ```
 
-| Argument        | Default              | Description                              |
-| --------------- | -------------------- | ---------------------------------------- |
-| `SOURCE_ROOT`   | `.` (current dir)    | Directory to search for skills.          |
-| `--depth N`     | `5`                  | Max search depth below `SOURCE_ROOT`.    |
-| `--target DIR`  | `~/.agents/skills`   | Where the symlinks are created.          |
+| Argument        | Default              | Description                                      |
+| --------------- | -------------------- | ------------------------------------------------ |
+| `SOURCE_ROOT`   | `.` (current dir)    | Directory to search for skills.                  |
+| `--depth N`     | `5`                  | Max search depth below `SOURCE_ROOT`.            |
+| `--target DIR`  | `~/.agents/skills`   | Where the symlinks are created.                  |
+| `--truncate`    | (default)            | Cut long lines to the terminal width.            |
+| `--wrap`        |                      | Let long lines wrap; viewport accounts for it.   |
 
 ### Examples
 
