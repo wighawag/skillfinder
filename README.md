@@ -17,6 +17,8 @@ toggle which ones are symlinked into a target directory (default
   `./engineering/tdd`) to keep lines short and readable.
 - **Grouped by folder:** skills are organised into the folder hierarchy they
   live in (e.g. `engineering/`, `productivity/`), shown as an indented tree.
+  Chains of single-child folders are **compacted** into one header (e.g.
+  `HKUDS/nanobot/nanobot/skills/`) so deep nesting stays readable.
 - **Disable folders:** put the cursor on a folder header and press `space` to
   disable it. A disabled folder is shown as `[X] name/  (hidden)` and its whole
   subtree (subfolders + skills) is hidden. Disabling a folder also **unlinks**

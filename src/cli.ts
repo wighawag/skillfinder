@@ -211,7 +211,28 @@ function buildTree(
   topFolders.forEach(sortNode);
   rootSkills.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 
+  topFolders.forEach(compactNode);
+
   return { topFolders, rootSkills };
+}
+
+/**
+ * Collapse chains of single-child folders into one node. A folder with no
+ * skills of its own and exactly one subfolder is merged with that subfolder:
+ * the labels are joined with "/", and the merged node adopts the child's
+ * absolute path (the deepest folder, used as the disable key) and contents.
+ * Applied recursively so e.g. HKUDS/nanobot/nanobot/skills becomes a single
+ * header. Mutates the node in place.
+ */
+function compactNode(node: FolderNode): void {
+  while (node.skills.length === 0 && node.folders.length === 1) {
+    const child = node.folders[0]!;
+    node.label = `${node.label}/${child.label}`;
+    node.abs = child.abs; // disable key = deepest folder in the chain
+    node.skills = child.skills;
+    node.folders = child.folders;
+  }
+  node.folders.forEach(compactNode);
 }
 
 /** Collect the absolute dirs of all skills in a folder subtree. */
@@ -456,26 +477,28 @@ function buildItems(
     });
   }
 
-  const emitFolder = (node: FolderNode): void => {
+  // renderDepth is the display indent level; it is independent of the node's
+  // original tree depth so compacted (merged) chains indent correctly.
+  const emitFolder = (node: FolderNode, renderDepth: number): void => {
     const isDisabled = disabled.has(node.abs);
     items.push({
       kind: "folder",
       label: node.label,
       abs: node.abs,
-      depth: node.depth,
+      depth: renderDepth,
       disabled: isDisabled,
     });
     if (isDisabled) return; // hide subtree
-    for (const f of node.folders) emitFolder(f);
+    for (const f of node.folders) emitFolder(f, renderDepth + 1);
     for (const s of node.skills) {
       items.push({
         kind: "skill",
-        depth: s.depth,
+        depth: renderDepth + 1,
         row: makeRow(s.abs, s.name, target, sourceRoot, collisionNames),
       });
     }
   };
-  for (const f of topFolders) emitFolder(f);
+  for (const f of topFolders) emitFolder(f, 0);
 
   return items;
 }
