@@ -1,10 +1,10 @@
 {
-  "name": "find-skills",
+  "name": "skillfinder",
   "version": "0.1.0",
   "description": "Interactively link AI skills (dirs containing SKILL.md) into a target directory via symlinks.",
   "type": "module",
   "bin": {
-    "find-skills": "dist/cli.js"
+    "skillfinder": "dist/cli.js"
   },
   "files": [
     "dist"

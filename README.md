@@ -1,9 +1,9 @@
-# find-skills
+# skillfinder
 
 Interactively link AI **skills** into a target directory via symlinks.
 
 A *skill* is any directory that directly contains a `SKILL.md` file.
-`find-skills` recursively discovers skills under a source root, then lets you
+`skillfinder` recursively discovers skills under a source root, then lets you
 toggle which ones are symlinked into a target directory (default
 `~/.agents/skills`).
 
@@ -23,7 +23,7 @@ toggle which ones are symlinked into a target directory (default
   disable it. A disabled folder is shown as `[X] name/  (hidden)` and its whole
   subtree (subfolders + skills) is hidden. Disabling a folder also **unlinks**
   every currently-linked skill within it. Disabled folders are remembered in
-  `~/.config/find-skills/config.json` (by absolute path) and persist across
+  `~/.config/skillfinder/config.json` (by absolute path) and persist across
   runs. Re-enabling a folder reveals its skills again but does not re-create
   any links.
 - **Symlinked target handling:** if the target dir is itself a symlink, offers
@@ -47,8 +47,8 @@ toggle which ones are symlinked into a target directory (default
 
 ## Configuration
 
-Disabled folders are stored in `~/.config/find-skills/config.json` (or
-`$XDG_CONFIG_HOME/find-skills/config.json` when set):
+Disabled folders are stored in `~/.config/skillfinder/config.json` (or
+`$XDG_CONFIG_HOME/skillfinder/config.json` when set):
 
 ```json
 {
@@ -64,17 +64,17 @@ regardless of which `SOURCE_ROOT` you launch from.
 ## Install
 
 ```sh
-npm install -g find-skills
+npm install -g skillfinder
 # or
-pnpm add -g find-skills
+pnpm add -g skillfinder
 ```
 
-This exposes the `find-skills` command.
+This exposes the `skillfinder` command.
 
 ## Usage
 
 ```sh
-find-skills [SOURCE_ROOT] [--depth N] [--target DIR] [--truncate|--wrap]
+skillfinder [SOURCE_ROOT] [--depth N] [--target DIR] [--truncate|--wrap]
 ```
 
 | Argument        | Default              | Description                                      |
@@ -89,13 +89,13 @@ find-skills [SOURCE_ROOT] [--depth N] [--target DIR] [--truncate|--wrap]
 
 ```sh
 # Search the current repo, link into ~/.agents/skills
-find-skills
+skillfinder
 
 # Search across all your repos
-find-skills ~/dev/github --depth 5
+skillfinder ~/dev/github --depth 5
 
 # Use a different target directory
-find-skills . --target ~/some/other/skills
+skillfinder . --target ~/some/other/skills
 ```
 
 ## Development

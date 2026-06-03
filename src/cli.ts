@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * find-skills: discover AI skills under a source root and interactively
+ * skillfinder: discover AI skills under a source root and interactively
  * toggle which ones are symlinked into a target directory (default
  * ~/.agents/skills).
  *
@@ -9,7 +9,7 @@
  * when <target>/<name> is a symlink pointing at that skill directory.
  *
  * Usage:
- *   find-skills [SOURCE_ROOT] [--depth N] [--target DIR]
+ *   skillfinder [SOURCE_ROOT] [--depth N] [--target DIR]
  *
  *   SOURCE_ROOT   directory to search (default: current directory)
  *   --depth N     max search depth below SOURCE_ROOT (default: 5)
@@ -84,7 +84,7 @@ function displayPathFor(skillDir: string, sourceRoot: string): string {
   return `./${rel}`;
 }
 
-// ---- Persistent config (~/.config/find-skills/config.json) ----------------
+// ---- Persistent config (~/.config/skillfinder/config.json) ----------------
 
 interface Config {
   /** absolute paths of folders the user disabled (children hidden) */
@@ -96,7 +96,7 @@ function configPath(): string {
     process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.trim() !== ""
       ? process.env.XDG_CONFIG_HOME
       : path.join(os.homedir(), ".config");
-  return path.join(base, "find-skills", "config.json");
+  return path.join(base, "skillfinder", "config.json");
 }
 
 function loadConfig(): Config {
@@ -774,7 +774,7 @@ function fail(msg: string): never {
 function printHelp(): void {
   console.log(
     [
-      "find-skills [SOURCE_ROOT] [--depth N] [--target DIR] [--truncate|--wrap]",
+      "skillfinder [SOURCE_ROOT] [--depth N] [--target DIR] [--truncate|--wrap]",
       "",
       "  SOURCE_ROOT   directory to search (default: current directory)",
       "  --depth N     max search depth below SOURCE_ROOT (default: 5)",
