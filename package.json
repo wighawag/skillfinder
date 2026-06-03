@@ -1,0 +1,32 @@
+{
+  "name": "find-skills",
+  "version": "0.1.0",
+  "description": "Interactively link AI skills (dirs containing SKILL.md) into a target directory via symlinks.",
+  "type": "module",
+  "bin": {
+    "find-skills": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --experimental-strip-types src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "ai",
+    "skills",
+    "cli",
+    "symlink"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^22.0.0"
+  }
+}
