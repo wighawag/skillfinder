@@ -53,6 +53,8 @@ interface Row {
   name: string;
   /** absolute path to the candidate skill source dir */
   path: string;
+  /** path shown in the UI, relative to the source root when possible */
+  displayPath: string;
   /** same name appears under multiple sources */
   collision: boolean;
   /** this candidate is the one currently linked */
@@ -68,6 +70,18 @@ function expandUser(p: string): string {
   if (p === "~") return os.homedir();
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
   return p;
+}
+
+/**
+ * Path to display for a skill: relative to the source root when the skill
+ * lives under it (prefixed with ./), otherwise the absolute path. The skill
+ * dir that *is* the root renders as ".".
+ */
+function displayPathFor(skillDir: string, sourceRoot: string): string {
+  const rel = path.relative(sourceRoot, skillDir);
+  if (rel === "") return ".";
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return skillDir; // outside root
+  return `./${rel}`;
 }
 
 /**
@@ -234,7 +248,7 @@ async function ensureRealTarget(
  * Build display rows. Each row is a distinct (name, source dir) candidate.
  * Marks whether it is the currently-linked version and flags name collisions.
  */
-function buildRows(skills: Skill[], target: string): Row[] {
+function buildRows(skills: Skill[], target: string, sourceRoot: string): Row[] {
   const byName = new Map<string, string[]>();
   for (const s of skills) {
     const arr = byName.get(s.name) ?? [];
@@ -256,7 +270,16 @@ function buildRows(skills: Skill[], target: string): Row[] {
 
     for (const p of paths) {
       const isLinked = linkedTo !== null && linkedTo === fs.realpathSync(p);
-      rows.push({ name, path: p, collision, isLinked, linkPath, nameOccupied });
+      const displayPath = displayPathFor(p, sourceRoot);
+      rows.push({
+        name,
+        path: p,
+        displayPath,
+        collision,
+        isLinked,
+        linkPath,
+        nameOccupied,
+      });
     }
   }
   return rows;
@@ -326,7 +349,7 @@ function formatRow(r: Row, i: number, cursor: boolean, showIndex: boolean): stri
     : cursor
       ? `${CYAN}\u276f${RESET} `
       : "  ";
-  const body = `${mark}  ${name}${namePad}${DIM}${r.path}${RESET}${note}`;
+  const body = `${mark}  ${name}${namePad}${DIM}${r.displayPath}${RESET}${note}`;
   return cursor && !showIndex ? `${prefix}${BOLD}${body}${RESET}` : `${prefix}${body}`;
 }
 
@@ -478,9 +501,10 @@ async function runFallback(
   rl: LineReader,
   skills: Skill[],
   target: string,
+  sourceRoot: string,
 ): Promise<void> {
   for (;;) {
-    const rows = buildRows(skills, target);
+    const rows = buildRows(skills, target, sourceRoot);
     printRows(rows, target);
 
     const line = await rl.prompt("> ");
@@ -516,6 +540,7 @@ async function runInteractive(
   skills: Skill[],
   target: string,
   wrap: WrapMode,
+  sourceRoot: string,
 ): Promise<void> {
   const stdin = process.stdin;
   const stdout = process.stdout;
@@ -531,7 +556,7 @@ async function runInteractive(
   let top = 0;
 
   const render = (): void => {
-    const rows = buildRows(skills, target);
+    const rows = buildRows(skills, target, sourceRoot);
     if (cursor >= rows.length) cursor = rows.length - 1;
     if (cursor < 0) cursor = 0;
 
@@ -634,7 +659,7 @@ async function runInteractive(
 
   function onKey(_str: string, key: readlineCb.Key): void {
     if (!key) return;
-    const rows = buildRows(skills, target);
+    const rows = buildRows(skills, target, sourceRoot);
 
     if (key.ctrl && key.name === "c") {
       cleanup();
@@ -715,7 +740,7 @@ async function main(): Promise<void> {
       rlInterface.close(); // hand stdin to the keypress loop
     } else {
       usedFallback = true;
-      await runFallback(rl, skills, target);
+      await runFallback(rl, skills, target, source);
       rlInterface.close();
     }
   } catch (e) {
@@ -724,7 +749,7 @@ async function main(): Promise<void> {
   }
 
   if (!usedFallback) {
-    await runInteractive(skills, target, args.wrap);
+    await runInteractive(skills, target, args.wrap, source);
   }
 
   console.log("Done.");

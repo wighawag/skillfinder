@@ -13,7 +13,8 @@ toggle which ones are symlinked into a target directory (default
   (`.git`, `node_modules`, `dist`, …) and **all dotfolders** (e.g. `.agents`,
   which holds repo-specific installed skills rather than source skills).
 - Shows which skills are currently linked (`[x]` / `[ ]`) and where each
-  source lives.
+  source lives. Source paths are shown **relative to the search root** (e.g.
+  `./engineering/tdd`) to keep lines short and readable.
 - **Symlinked target handling:** if the target dir is itself a symlink, offers
   to convert it into a real directory (the pointed-to location is untouched).
 - **Name collisions:** when the same skill name exists under multiple sources,
