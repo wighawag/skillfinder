@@ -399,7 +399,7 @@ function currentLinkTargetResolved(linkPath: string): string | null {
  */
 class LineReader {
   private it: AsyncIterator<string>;
-  constructor(private rl: readline.Interface) {
+  constructor(rl: readline.Interface) {
     this.it = rl[Symbol.asyncIterator]();
   }
   /** Print a prompt (no newline) and read the next line, trimmed. Returns

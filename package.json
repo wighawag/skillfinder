@@ -1,13 +1,24 @@
 {
   "name": "skillfinder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Interactively link AI skills (dirs containing SKILL.md) into a target directory via symlinks.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wighawag/find-skills.git"
+  },
+  "homepage": "https://github.com/wighawag/find-skills#readme",
+  "bugs": {
+    "url": "https://github.com/wighawag/find-skills/issues"
+  },
+  "author": "wighawag",
   "bin": {
     "skillfinder": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=18"

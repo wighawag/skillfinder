@@ -26,6 +26,10 @@ toggle which ones are symlinked into a target directory (default
   `~/.config/skillfinder/config.json` (by absolute path) and persist across
   runs. Re-enabling a folder reveals its skills again but does not re-create
   any links.
+- **Description panel:** the highlighted skill's `description` (from its
+  `SKILL.md` YAML frontmatter) is shown in a panel at the bottom of the
+  interactive UI. It wraps onto multiple lines (never truncated) so the full
+  text is always readable.
 - **Symlinked target handling:** if the target dir is itself a symlink, offers
   to convert it into a real directory (the pointed-to location is untouched).
 - **Name collisions:** when the same skill name exists under multiple sources,
