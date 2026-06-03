@@ -33,5 +33,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scrolling keyboard TUI, `--truncate`/`--wrap` modes, and a piped-stdin
   fallback.
 
-[0.2.0]: https://github.com/wighawag/find-skills/releases/tag/v0.2.0
-[0.1.0]: https://github.com/wighawag/find-skills/releases/tag/v0.1.0
+[0.2.0]: https://github.com/wighawag/skillfinder/releases/tag/v0.2.0
+[0.1.0]: https://github.com/wighawag/skillfinder/releases/tag/v0.1.0

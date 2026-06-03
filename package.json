@@ -5,11 +5,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wighawag/find-skills.git"
+    "url": "git+https://github.com/wighawag/skillfinder.git"
   },
-  "homepage": "https://github.com/wighawag/find-skills#readme",
+  "homepage": "https://github.com/wighawag/skillfinder#readme",
   "bugs": {
-    "url": "https://github.com/wighawag/find-skills/issues"
+    "url": "https://github.com/wighawag/skillfinder/issues"
   },
   "author": "wighawag",
   "bin": {
