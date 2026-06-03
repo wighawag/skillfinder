@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""
+find-skills: discover AI skills under a source root and interactively
+toggle which ones are symlinked into a target directory (default
+~/.agents/skills).
+
+A "skill" is any directory that directly contains a SKILL.md file.
+Skills are keyed by their directory name. A skill is considered "linked"
+when <target>/<name> is a symlink pointing at that skill directory.
+
+Usage:
+    find-skills [SOURCE_ROOT] [--depth N] [--target DIR]
+
+    SOURCE_ROOT   directory to search (default: current directory)
+    --depth N     max search depth below SOURCE_ROOT (default: 5)
+    --target DIR  where links live (default: ~/.agents/skills)
+
+Linux assumed (uses symlinks via os.symlink, i.e. `ln -s`).
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+# Directories we never descend into while searching for skills.
+PRUNE_DIRS = {
+    ".git", ".hg", ".svn",
+    "node_modules", ".venv", "venv", "__pycache__",
+    "dist", "build", ".out-of-scope", ".next", ".cache",
+    ".idea", ".vscode", "target", "vendor",
+}
+
+# ---- ANSI colours (disabled when not a tty) -------------------------------
+
+if sys.stdout.isatty():
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    RED = "\033[31m"
+    CYAN = "\033[36m"
+    RESET = "\033[0m"
+else:
+    BOLD = DIM = GREEN = YELLOW = RED = CYAN = RESET = ""
+
+
+def find_skills(root: Path, max_depth: int):
+    """Return a sorted list of (name, skill_dir Path) for every directory
+    under root (within max_depth) that directly contains a SKILL.md."""
+    found = []
+    root = root.resolve()
+
+    def walk(directory: Path, depth: int):
+        try:
+            entries = list(os.scandir(directory))
+        except (PermissionError, FileNotFoundError):
+            return
+
+        # Is this directory itself a skill?
+        if any(e.name == "SKILL.md" and e.is_file() for e in entries):
+            found.append((directory.name, directory))
+            # Skills are not nested inside skills; stop descending.
+            return
+
+        if depth >= max_depth:
+            return
+
+        for e in entries:
+            if not e.is_dir(follow_symlinks=False):
+                continue
+            # Skip dotfolders (e.g. .agents holds repo-specific installed
+            # skills, not source skills) and known noise dirs.
+            if e.name.startswith("."):
+                continue
+            if e.name in PRUNE_DIRS:
+                continue
+            walk(Path(e.path), depth + 1)
+
+    walk(root, 0)
+    found.sort(key=lambda t: (t[0].lower(), str(t[1])))
+    return found
+
+
+def ensure_real_target(target: Path) -> bool:
+    """Ensure `target` is a real directory. If it's a symlink, offer to
+    replace it with a real directory (preserving nothing but warning the
+    user). Returns True if usable, False to abort."""
+    if target.is_symlink():
+        dest = os.readlink(target)
+        print(f"{YELLOW}Target {target} is a symlink -> {dest}{RESET}")
+        ans = input(
+            "Replace this symlink with a real directory? "
+            "(the link is removed; the target it points to is untouched) [y/N] "
+        ).strip().lower()
+        if ans != "y":
+            print("Aborted.")
+            return False
+        target.unlink()
+        target.mkdir(parents=True, exist_ok=True)
+        print(f"{GREEN}Created real directory {target}{RESET}")
+        return True
+
+    if target.exists():
+        if not target.is_dir():
+            print(f"{RED}Target {target} exists and is not a directory.{RESET}")
+            return False
+        return True
+
+    # does not exist
+    ans = input(f"Target {target} does not exist. Create it? [Y/n] ").strip().lower()
+    if ans in ("", "y"):
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+    print("Aborted.")
+    return False
+
+
+def current_link_target(link_path: Path):
+    """If link_path is a symlink, return the resolved Path it points to,
+    else None."""
+    if link_path.is_symlink():
+        try:
+            return Path(os.readlink(link_path))
+        except OSError:
+            return None
+    return None
+
+
+def build_rows(skills, target: Path):
+    """Build display rows. Each row is a distinct (name, source_dir)
+    candidate. Marks whether it is the currently-linked version, and flags
+    name collisions (same name, multiple sources)."""
+    # group by name to detect collisions
+    by_name = {}
+    for name, path in skills:
+        by_name.setdefault(name, []).append(path)
+
+    rows = []
+    for name in sorted(by_name, key=str.lower):
+        paths = by_name[name]
+        collision = len(paths) > 1
+        link_path = target / name
+        linked_to = current_link_target(link_path)
+        linked_to_resolved = (
+            (target / linked_to).resolve() if linked_to and not linked_to.is_absolute()
+            else (linked_to.resolve() if linked_to else None)
+        )
+        for path in sorted(paths, key=lambda p: str(p)):
+            is_linked = (
+                linked_to_resolved is not None
+                and linked_to_resolved == path.resolve()
+            )
+            rows.append({
+                "name": name,
+                "path": path,
+                "collision": collision,
+                "is_linked": is_linked,
+                "link_path": link_path,
+                # name is occupied by *some* link (maybe to another path)
+                "name_occupied": link_path.is_symlink() or link_path.exists(),
+            })
+    return rows
+
+
+def print_rows(rows, target: Path):
+    print()
+    print(f"{BOLD}Skills  (target: {target}){RESET}")
+    print(f"{DIM}{'':4}{'':4}{'name':<32}{'source'}{RESET}")
+    for i, r in enumerate(rows, 1):
+        mark = f"{GREEN}[x]{RESET}" if r["is_linked"] else "[ ]"
+        name = r["name"]
+        if r["collision"]:
+            name = f"{name} {YELLOW}*{RESET}"
+        # if name is occupied but NOT by this row, dim/note it
+        note = ""
+        if r["name_occupied"] and not r["is_linked"]:
+            note = f"  {DIM}(name in use){RESET}"
+        print(f"{i:>3}  {mark}  {name:<32}{DIM}{r['path']}{RESET}{note}")
+    if any(r["collision"] for r in rows):
+        print(f"\n{YELLOW}*{RESET} name collision: multiple sources share this "
+              f"name; linking one replaces the other.")
+    print(f"\n{DIM}Enter a number to toggle, or 'q' to quit.{RESET}")
+
+
+def toggle(row, rows, target: Path):
+    """Toggle the link for the given row."""
+    link_path = row["link_path"]
+    name = row["name"]
+
+    if row["is_linked"]:
+        # unlink
+        link_path.unlink()
+        print(f"{YELLOW}unlinked{RESET} {name}")
+        return
+
+    # We want to link this row's path.
+    if link_path.is_symlink():
+        # currently points elsewhere (collision / re-point) -> replace
+        old = current_link_target(link_path)
+        link_path.unlink()
+        print(f"{DIM}removed existing link {name} -> {old}{RESET}")
+    elif link_path.exists():
+        print(f"{RED}cannot link {name}: a real file/dir already exists at "
+              f"{link_path}{RESET}")
+        return
+
+    os.symlink(row["path"].resolve(), link_path)
+    print(f"{GREEN}linked{RESET}   {name} -> {row['path']}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Interactively link AI skills into a target directory.")
+    parser.add_argument("source", nargs="?", default=".",
+                        help="source root to search (default: current dir)")
+    parser.add_argument("--depth", type=int, default=5,
+                        help="max search depth below source (default: 5)")
+    parser.add_argument("--target", default="~/.agents/skills",
+                        help="target dir for links (default: ~/.agents/skills)")
+    args = parser.parse_args()
+
+    source = Path(os.path.expanduser(args.source)).resolve()
+    target = Path(os.path.expanduser(args.target))
+
+    if not source.is_dir():
+        print(f"{RED}Source {source} is not a directory.{RESET}")
+        sys.exit(1)
+
+    print(f"Searching {CYAN}{source}{RESET} (max depth {args.depth}) ...")
+    skills = find_skills(source, args.depth)
+    if not skills:
+        print(f"{YELLOW}No skills (directories containing SKILL.md) found.{RESET}")
+        sys.exit(0)
+
+    if not ensure_real_target(target):
+        sys.exit(1)
+
+    while True:
+        rows = build_rows(skills, target)
+        print_rows(rows, target)
+        try:
+            choice = input("> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if choice in ("q", "quit", "exit"):
+            break
+        if not choice:
+            continue
+        if not choice.isdigit():
+            print(f"{RED}Enter a number or 'q'.{RESET}")
+            continue
+        idx = int(choice)
+        if not (1 <= idx <= len(rows)):
+            print(f"{RED}Out of range.{RESET}")
+            continue
+        toggle(rows[idx - 1], rows, target)
+
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()
