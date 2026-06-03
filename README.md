@@ -15,6 +15,15 @@ toggle which ones are symlinked into a target directory (default
 - Shows which skills are currently linked (`[x]` / `[ ]`) and where each
   source lives. Source paths are shown **relative to the search root** (e.g.
   `./engineering/tdd`) to keep lines short and readable.
+- **Grouped by folder:** skills are organised into the folder hierarchy they
+  live in (e.g. `engineering/`, `productivity/`), shown as an indented tree.
+- **Disable folders:** put the cursor on a folder header and press `space` to
+  disable it. A disabled folder is shown as `[X] name/  (hidden)` and its whole
+  subtree (subfolders + skills) is hidden. Disabling a folder also **unlinks**
+  every currently-linked skill within it. Disabled folders are remembered in
+  `~/.config/find-skills/config.json` (by absolute path) and persist across
+  runs. Re-enabling a folder reveals its skills again but does not re-create
+  any links.
 - **Symlinked target handling:** if the target dir is itself a symlink, offers
   to convert it into a real directory (the pointed-to location is untouched).
 - **Name collisions:** when the same skill name exists under multiple sources,
@@ -33,6 +42,22 @@ toggle which ones are symlinked into a target directory (default
   instead; the viewport then budgets by physical lines so the cursor still
   stays visible.
 - Links are plain symlinks (Unix assumed).
+
+## Configuration
+
+Disabled folders are stored in `~/.config/find-skills/config.json` (or
+`$XDG_CONFIG_HOME/find-skills/config.json` when set):
+
+```json
+{
+  "disabledFolders": [
+    "/abs/path/to/some/folder"
+  ]
+}
+```
+
+Folders are keyed by absolute path, so a disabled folder stays disabled
+regardless of which `SOURCE_ROOT` you launch from.
 
 ## Install
 

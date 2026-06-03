@@ -84,6 +84,147 @@ function displayPathFor(skillDir: string, sourceRoot: string): string {
   return `./${rel}`;
 }
 
+// ---- Persistent config (~/.config/find-skills/config.json) ----------------
+
+interface Config {
+  /** absolute paths of folders the user disabled (children hidden) */
+  disabledFolders: string[];
+}
+
+function configPath(): string {
+  const base =
+    process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.trim() !== ""
+      ? process.env.XDG_CONFIG_HOME
+      : path.join(os.homedir(), ".config");
+  return path.join(base, "find-skills", "config.json");
+}
+
+function loadConfig(): Config {
+  try {
+    const raw = fs.readFileSync(configPath(), "utf8");
+    const parsed = JSON.parse(raw) as Partial<Config>;
+    const disabled = Array.isArray(parsed.disabledFolders)
+      ? parsed.disabledFolders.filter((x): x is string => typeof x === "string")
+      : [];
+    return { disabledFolders: disabled };
+  } catch {
+    return { disabledFolders: [] };
+  }
+}
+
+function saveConfig(cfg: Config): void {
+  const p = configPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  // keep the file stable & readable: sorted, unique
+  const disabledFolders = [...new Set(cfg.disabledFolders)].sort();
+  fs.writeFileSync(p, JSON.stringify({ disabledFolders }, null, 2) + "\n");
+}
+
+// ---- Folder tree --------------------------------------------------------
+
+interface FolderNode {
+  kind: "folder";
+  /** segment label, e.g. "engineering" (the root node uses the source root) */
+  label: string;
+  /** absolute path of this folder */
+  abs: string;
+  /** depth from the (invisible) root; top-level folders are depth 0 */
+  depth: number;
+  folders: FolderNode[];
+  skills: SkillLeaf[];
+}
+
+interface SkillLeaf {
+  kind: "skill";
+  name: string;
+  /** absolute path to the skill dir */
+  abs: string;
+  depth: number;
+}
+
+/**
+ * Build a folder tree from the flat skill list. Each skill is placed under the
+ * chain of folders between the source root and the skill's parent directory.
+ * Skills whose parent IS the source root are attached to a synthetic root node
+ * (rendered without a header). Returns the list of top-level folder nodes and
+ * the root-level skills.
+ */
+function buildTree(
+  skills: Skill[],
+  sourceRoot: string,
+): { topFolders: FolderNode[]; rootSkills: SkillLeaf[] } {
+  const topFolders: FolderNode[] = [];
+  const rootSkills: SkillLeaf[] = [];
+  // index folders by absolute path for quick lookup
+  const byAbs = new Map<string, FolderNode>();
+
+  const getFolder = (abs: string, label: string, depth: number): FolderNode => {
+    let n = byAbs.get(abs);
+    if (!n) {
+      n = { kind: "folder", label, abs, depth, folders: [], skills: [] };
+      byAbs.set(abs, n);
+    }
+    return n;
+  };
+
+  for (const s of skills) {
+    const parent = path.dirname(s.dir);
+    const rel = path.relative(sourceRoot, parent);
+    // segments between root and the skill's parent
+    const segments =
+      rel === "" || rel.startsWith("..") || path.isAbsolute(rel)
+        ? []
+        : rel.split(path.sep).filter((x) => x !== "");
+
+    if (segments.length === 0) {
+      rootSkills.push({ kind: "skill", name: s.name, abs: s.dir, depth: 0 });
+      continue;
+    }
+
+    // walk/create the folder chain
+    let parentList = topFolders;
+    let curAbs = sourceRoot;
+    let node: FolderNode | null = null;
+    for (let d = 0; d < segments.length; d++) {
+      curAbs = path.join(curAbs, segments[d]!);
+      const existing = byAbs.get(curAbs);
+      const folder = getFolder(curAbs, segments[d]!, d);
+      if (!existing) parentList.push(folder);
+      parentList = folder.folders;
+      node = folder;
+    }
+    node!.skills.push({
+      kind: "skill",
+      name: s.name,
+      abs: s.dir,
+      depth: segments.length,
+    });
+  }
+
+  // sort folders & skills alphabetically at every level
+  const sortNode = (n: FolderNode): void => {
+    n.folders.sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()));
+    n.skills.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    n.folders.forEach(sortNode);
+  };
+  topFolders.sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()));
+  topFolders.forEach(sortNode);
+  rootSkills.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+
+  return { topFolders, rootSkills };
+}
+
+/** Collect the absolute dirs of all skills in a folder subtree. */
+function skillsInSubtree(node: FolderNode): string[] {
+  const out: string[] = [];
+  const walk = (n: FolderNode): void => {
+    for (const s of n.skills) out.push(s.abs);
+    for (const f of n.folders) walk(f);
+  };
+  walk(node);
+  return out;
+}
+
 /**
  * Return skills for every directory under root (within maxDepth) that
  * directly contains a SKILL.md. Skills are not nested inside skills, so we
@@ -244,45 +385,104 @@ async function ensureRealTarget(
   return false;
 }
 
-/**
- * Build display rows. Each row is a distinct (name, source dir) candidate.
- * Marks whether it is the currently-linked version and flags name collisions.
- */
-function buildRows(skills: Skill[], target: string, sourceRoot: string): Row[] {
-  const byName = new Map<string, string[]>();
-  for (const s of skills) {
-    const arr = byName.get(s.name) ?? [];
-    arr.push(s.dir);
-    byName.set(s.name, arr);
-  }
+/** A folder header line in the display. */
+interface FolderItem {
+  kind: "folder";
+  label: string;
+  abs: string;
+  depth: number;
+  disabled: boolean;
+}
 
-  const rows: Row[] = [];
-  const names = [...byName.keys()].sort((a, b) =>
-    a.toLowerCase().localeCompare(b.toLowerCase()),
+/** A skill row in the display (carries a Row payload). */
+interface SkillItem {
+  kind: "skill";
+  depth: number;
+  row: Row;
+}
+
+type DisplayItem = FolderItem | SkillItem;
+
+/** Make a Row (link state) for a skill leaf, detecting collisions globally. */
+function makeRow(
+  abs: string,
+  name: string,
+  target: string,
+  sourceRoot: string,
+  collisionNames: Set<string>,
+): Row {
+  const linkPath = path.join(target, name);
+  const linkedTo = currentLinkTargetResolved(linkPath);
+  const nameOccupied = lstatIsSymlink(linkPath) || exists(linkPath);
+  const isLinked = linkedTo !== null && linkedTo === fs.realpathSync(abs);
+  return {
+    name,
+    path: abs,
+    displayPath: displayPathFor(abs, sourceRoot),
+    collision: collisionNames.has(name),
+    isLinked,
+    linkPath,
+    nameOccupied,
+  };
+}
+
+/**
+ * Build the ordered list of display items (folder headers + skill rows) from
+ * the folder tree. Disabled folders are shown as collapsed headers; their
+ * subtree (subfolders + skills) is hidden.
+ */
+function buildItems(
+  skills: Skill[],
+  target: string,
+  sourceRoot: string,
+  disabled: Set<string>,
+): DisplayItem[] {
+  // collision = same skill name appears at 2+ source dirs
+  const nameCounts = new Map<string, number>();
+  for (const s of skills) nameCounts.set(s.name, (nameCounts.get(s.name) ?? 0) + 1);
+  const collisionNames = new Set(
+    [...nameCounts].filter(([, c]) => c > 1).map(([n]) => n),
   );
 
-  for (const name of names) {
-    const paths = (byName.get(name) ?? []).slice().sort();
-    const collision = paths.length > 1;
-    const linkPath = path.join(target, name);
-    const linkedTo = currentLinkTargetResolved(linkPath);
-    const nameOccupied = lstatIsSymlink(linkPath) || exists(linkPath);
+  const { topFolders, rootSkills } = buildTree(skills, sourceRoot);
+  const items: DisplayItem[] = [];
 
-    for (const p of paths) {
-      const isLinked = linkedTo !== null && linkedTo === fs.realpathSync(p);
-      const displayPath = displayPathFor(p, sourceRoot);
-      rows.push({
-        name,
-        path: p,
-        displayPath,
-        collision,
-        isLinked,
-        linkPath,
-        nameOccupied,
+  // root-level skills first (no header)
+  for (const s of rootSkills) {
+    items.push({
+      kind: "skill",
+      depth: 0,
+      row: makeRow(s.abs, s.name, target, sourceRoot, collisionNames),
+    });
+  }
+
+  const emitFolder = (node: FolderNode): void => {
+    const isDisabled = disabled.has(node.abs);
+    items.push({
+      kind: "folder",
+      label: node.label,
+      abs: node.abs,
+      depth: node.depth,
+      disabled: isDisabled,
+    });
+    if (isDisabled) return; // hide subtree
+    for (const f of node.folders) emitFolder(f);
+    for (const s of node.skills) {
+      items.push({
+        kind: "skill",
+        depth: s.depth,
+        row: makeRow(s.abs, s.name, target, sourceRoot, collisionNames),
       });
     }
-  }
-  return rows;
+  };
+  for (const f of topFolders) emitFolder(f);
+
+  return items;
+}
+
+/** Just the skill rows from a display-item list (for collision hint etc.). */
+function skillRows(items: DisplayItem[]): Row[] {
+  return items.filter((i): i is SkillItem => i.kind === "skill").map((i) => i.row);
 }
 
 function pad(s: string, width: number): string {
@@ -333,28 +533,57 @@ function physicalLines(s: string, cols: number): number {
   return Math.max(1, Math.ceil(len / cols));
 }
 
-/** Render a single row line. `cursor` highlights it (TUI). `showIndex`
- * prefixes the 1-based number (fallback mode). */
-function formatRow(r: Row, i: number, cursor: boolean, showIndex: boolean): string {
+const INDENT = "  "; // per tree depth level
+
+/** Render a skill row. `cursor` highlights it (TUI). `index` (1-based) is
+ * shown in fallback mode when >= 1. */
+function formatRow(r: Row, depth: number, cursor: boolean, index: number): string {
   const mark = r.isLinked ? `${GREEN}[x]${RESET}` : "[ ]";
   let name = r.name;
   if (r.collision) name = `${name} ${YELLOW}*${RESET}`;
   let note = "";
   if (r.nameOccupied && !r.isLinked) note = `  ${DIM}(name in use)${RESET}`;
+  const indent = INDENT.repeat(depth);
   // pad on the *plain* name length so colour codes don't break alignment
   const plainName = r.collision ? `${r.name} *` : r.name;
-  const namePad = " ".repeat(Math.max(0, 32 - plainName.length));
-  const prefix = showIndex
-    ? `${String(i + 1).padStart(3, " ")}  `
-    : cursor
-      ? `${CYAN}\u276f${RESET} `
-      : "  ";
-  const body = `${mark}  ${name}${namePad}${DIM}${r.displayPath}${RESET}${note}`;
-  return cursor && !showIndex ? `${prefix}${BOLD}${body}${RESET}` : `${prefix}${body}`;
+  const nameCol = 30 - indent.length;
+  const namePad = " ".repeat(Math.max(1, nameCol - plainName.length));
+  const prefix =
+    index >= 1
+      ? `${String(index).padStart(3, " ")}  `
+      : cursor
+        ? `${CYAN}\u276f${RESET} `
+        : "  ";
+  const body = `${indent}${mark}  ${name}${namePad}${DIM}${r.displayPath}${RESET}${note}`;
+  return cursor && index < 1 ? `${prefix}${BOLD}${body}${RESET}` : `${prefix}${body}`;
 }
 
-function collisionHint(rows: Row[]): string | null {
-  if (!rows.some((r) => r.collision)) return null;
+/** Render a folder header. */
+function formatFolder(f: FolderItem, cursor: boolean, index: number): string {
+  const indent = INDENT.repeat(f.depth);
+  const mark = f.disabled ? `${RED}[X]${RESET}` : `${CYAN}\u25be${RESET}`;
+  const label = f.disabled
+    ? `${DIM}${f.label}/  (hidden)${RESET}`
+    : `${BOLD}${f.label}/${RESET}`;
+  const prefix =
+    index >= 1
+      ? `${String(index).padStart(3, " ")}  `
+      : cursor
+        ? `${CYAN}\u276f${RESET} `
+        : "  ";
+  const body = `${indent}${mark} ${label}`;
+  return cursor && index < 1 ? `${prefix}${BOLD}${body}${RESET}` : `${prefix}${body}`;
+}
+
+/** Render any display item. */
+function formatItem(it: DisplayItem, cursor: boolean, index: number): string {
+  return it.kind === "folder"
+    ? formatFolder(it, cursor, index)
+    : formatRow(it.row, it.depth, cursor, index);
+}
+
+function collisionHint(items: DisplayItem[]): string | null {
+  if (!skillRows(items).some((r) => r.collision)) return null;
   return (
     `${YELLOW}*${RESET} name collision: multiple sources share this ` +
     `name; linking one replaces the other.`
@@ -362,14 +591,15 @@ function collisionHint(rows: Row[]): string | null {
 }
 
 /** Non-interactive (piped stdin) rendering: numbered list. */
-function printRows(rows: Row[], target: string): void {
+function printItems(items: DisplayItem[], target: string): void {
   console.log();
   console.log(`${BOLD}Skills  (target: ${target})${RESET}`);
-  console.log(`${DIM}${pad("", 8)}${pad("name", 32)}source${RESET}`);
-  rows.forEach((r, i) => console.log(formatRow(r, i, false, true)));
-  const hint = collisionHint(rows);
+  items.forEach((it, i) => console.log(formatItem(it, false, i + 1)));
+  const hint = collisionHint(items);
   if (hint) console.log(`\n${hint}`);
-  console.log(`\n${DIM}Enter a number to toggle, or 'q' to quit.${RESET}`);
+  console.log(
+    `\n${DIM}Enter a number to toggle a skill or disable a folder, or 'q' to quit.${RESET}`,
+  );
 }
 
 type ToggleStatus = "linked" | "unlinked" | "repointed" | "blocked";
@@ -409,6 +639,48 @@ function applyToggle(row: Row): ToggleResult {
   return {
     status: repointed ? "repointed" : "linked",
     message: `${GREEN}linked${RESET}   ${name} -> ${row.path}`,
+  };
+}
+
+/**
+ * Toggle a folder's disabled state. Disabling hides the subtree and unlinks
+ * every currently-linked skill within it. Persists the config. Returns a
+ * status message. `skills` is the full skill list (to locate subtree links).
+ */
+function toggleFolder(
+  folderAbs: string,
+  label: string,
+  cfg: Config,
+  disabled: Set<string>,
+  skills: Skill[],
+  target: string,
+): ToggleResult {
+  if (disabled.has(folderAbs)) {
+    disabled.delete(folderAbs);
+    cfg.disabledFolders = [...disabled];
+    saveConfig(cfg);
+    return { status: "unlinked", message: `${GREEN}enabled${RESET}  ${label}/` };
+  }
+
+  // Disable: unlink any linked skill whose dir is inside this folder.
+  const prefix = folderAbs + path.sep;
+  let unlinked = 0;
+  for (const s of skills) {
+    if (!(s.dir === folderAbs || s.dir.startsWith(prefix))) continue;
+    const linkPath = path.join(target, s.name);
+    const linkedTo = currentLinkTargetResolved(linkPath);
+    if (linkedTo !== null && linkedTo === fs.realpathSync(s.dir)) {
+      fs.unlinkSync(linkPath);
+      unlinked++;
+    }
+  }
+  disabled.add(folderAbs);
+  cfg.disabledFolders = [...disabled];
+  saveConfig(cfg);
+  const suffix = unlinked > 0 ? ` (${unlinked} unlinked)` : "";
+  return {
+    status: "unlinked",
+    message: `${RED}disabled${RESET} ${label}/${suffix}`,
   };
 }
 
@@ -502,10 +774,12 @@ async function runFallback(
   skills: Skill[],
   target: string,
   sourceRoot: string,
+  cfg: Config,
+  disabled: Set<string>,
 ): Promise<void> {
   for (;;) {
-    const rows = buildRows(skills, target, sourceRoot);
-    printRows(rows, target);
+    const items = buildItems(skills, target, sourceRoot, disabled);
+    printItems(items, target);
 
     const line = await rl.prompt("> ");
     if (line === null) break; // EOF
@@ -518,11 +792,18 @@ async function runFallback(
       continue;
     }
     const idx = Number(choice);
-    if (idx < 1 || idx > rows.length) {
+    if (idx < 1 || idx > items.length) {
       console.log(`${RED}Out of range.${RESET}`);
       continue;
     }
-    console.log(applyToggle(rows[idx - 1]!).message);
+    const it = items[idx - 1]!;
+    if (it.kind === "folder") {
+      console.log(
+        toggleFolder(it.abs, it.label, cfg, disabled, skills, target).message,
+      );
+    } else {
+      console.log(applyToggle(it.row).message);
+    }
   }
 }
 
@@ -541,6 +822,8 @@ async function runInteractive(
   target: string,
   wrap: WrapMode,
   sourceRoot: string,
+  cfg: Config,
+  disabled: Set<string>,
 ): Promise<void> {
   const stdin = process.stdin;
   const stdout = process.stdout;
@@ -552,26 +835,25 @@ async function runInteractive(
 
   let cursor = 0;
   let statusLine = "";
-  // top visible skill-row index, adjusted to keep the cursor in view
+  // top visible item index, adjusted to keep the cursor in view
   let top = 0;
 
   const render = (): void => {
-    const rows = buildRows(skills, target, sourceRoot);
-    if (cursor >= rows.length) cursor = rows.length - 1;
+    const items = buildItems(skills, target, sourceRoot, disabled);
+    if (cursor >= items.length) cursor = items.length - 1;
     if (cursor < 0) cursor = 0;
 
-    const hint = collisionHint(rows);
+    const hint = collisionHint(items);
     const termRows = stdout.rows && stdout.rows > 0 ? stdout.rows : 24;
     const cols = stdout.columns && stdout.columns > 0 ? stdout.columns : 80;
 
     // Chrome lines around the scrolling list:
-    //   header + help + column-header (3)
+    //   header + help (2)
     //   + optional collision hint block (2: blank + hint)
     //   + scroll indicators (2: above + below, always reserved)
     //   + blank + status (2)
     const header = `${BOLD}Skills  (target: ${target})${RESET}`;
-    const help = `${DIM}\u2191/\u2193 move \u00b7 space toggle \u00b7 enter/q quit${RESET}`;
-    const colHeader = `${DIM}  ${pad("", 4)}${pad("name", 32)}source${RESET}`;
+    const help = `${DIM}\u2191/\u2193 move \u00b7 space toggle skill / disable folder \u00b7 enter/q quit${RESET}`;
     const hintLine = hint ?? "";
 
     // In wrap mode the chrome lines can themselves wrap; account for that.
@@ -579,50 +861,44 @@ async function runInteractive(
       wrap === "wrap"
         ? physicalLines(header, cols) +
           physicalLines(help, cols) +
-          physicalLines(colHeader, cols) +
           (hint ? 1 + physicalLines(hintLine, cols) : 0) +
           2 /* up + down indicators */ +
           2 /* blank + status */
-        : 3 + (hint ? 2 : 0) + 2 + 2;
+        : 2 + (hint ? 2 : 0) + 2 + 2;
     const budget = Math.max(1, termRows - chromeLines);
 
-    // Determine which rows are visible, keeping the cursor on-screen.
+    // Determine which items are visible, keeping the cursor on-screen.
     let end: number;
     if (wrap === "truncate") {
-      // 1 row == 1 physical line, so the budget is a simple row count.
+      // 1 item == 1 physical line, so the budget is a simple count.
       const viewport = budget;
       if (cursor < top) top = cursor;
       else if (cursor >= top + viewport) top = cursor - viewport + 1;
-      const maxTop = Math.max(0, rows.length - viewport);
+      const maxTop = Math.max(0, items.length - viewport);
       if (top > maxTop) top = maxTop;
-      end = Math.min(rows.length, top + viewport);
+      end = Math.min(items.length, top + viewport);
     } else {
-      // wrap mode: pack rows by physical-line cost; keep cursor visible.
+      // wrap mode: pack items by physical-line cost; keep cursor visible.
       if (cursor < top) top = cursor;
-      // grow window downward from `top` until cursor fits within budget
       const cost = (idx: number): number =>
-        physicalLines(formatRow(rows[idx]!, idx, idx === cursor, false), cols);
-      // If cursor is below the current window, scroll top down until the
-      // cursor's row fits in the budget counting upward from the cursor.
+        physicalLines(formatItem(items[idx]!, idx === cursor, 0), cols);
       if (cursor >= top) {
         let used = 0;
         let t = cursor;
-        // include rows from cursor upward while they fit
         while (t >= 0 && used + cost(t) <= budget) {
           used += cost(t);
           t--;
         }
-        const minTop = t + 1; // smallest top that still shows the cursor
+        const minTop = t + 1;
         if (top < minTop) top = minTop;
       }
-      // compute end by filling the budget downward from top
       let used = 0;
       let e = top;
-      while (e < rows.length && used + cost(e) <= budget) {
+      while (e < items.length && used + cost(e) <= budget) {
         used += cost(e);
         e++;
       }
-      end = Math.max(top + 1, e); // always show at least the top row
+      end = Math.max(top + 1, e);
     }
 
     const fit = (s: string): string =>
@@ -631,13 +907,12 @@ async function runInteractive(
     const lines: string[] = [];
     lines.push(fit(header));
     lines.push(fit(help));
-    lines.push(fit(colHeader));
     // up indicator (reserve the line even when none, to keep layout stable)
     lines.push(top > 0 ? `${DIM}  \u2191 ${top} more${RESET}` : "");
     for (let i = top; i < end; i++) {
-      lines.push(fit(formatRow(rows[i]!, i, i === cursor, false)));
+      lines.push(fit(formatItem(items[i]!, i === cursor, 0)));
     }
-    const below = rows.length - end;
+    const below = items.length - end;
     lines.push(below > 0 ? `${DIM}  \u2193 ${below} more${RESET}` : "");
     if (hint) lines.push("", fit(hintLine));
     lines.push("", fit(statusLine || " "));
@@ -659,7 +934,7 @@ async function runInteractive(
 
   function onKey(_str: string, key: readlineCb.Key): void {
     if (!key) return;
-    const rows = buildRows(skills, target, sourceRoot);
+    const items = buildItems(skills, target, sourceRoot, disabled);
 
     if (key.ctrl && key.name === "c") {
       cleanup();
@@ -667,22 +942,29 @@ async function runInteractive(
       process.exit(130);
     }
 
+    const count = items.length || 1;
     switch (key.name) {
       case "up":
       case "k":
-        cursor = (cursor - 1 + rows.length) % rows.length;
+        cursor = (cursor - 1 + count) % count;
         statusLine = "";
         render();
         break;
       case "down":
       case "j":
-        cursor = (cursor + 1) % rows.length;
+        cursor = (cursor + 1) % count;
         statusLine = "";
         render();
         break;
       case "space": {
-        const res = applyToggle(rows[cursor]!);
-        statusLine = res.message;
+        const it = items[cursor];
+        if (it) {
+          const res =
+            it.kind === "folder"
+              ? toggleFolder(it.abs, it.label, cfg, disabled, skills, target)
+              : applyToggle(it.row);
+          statusLine = res.message;
+        }
         render();
         break;
       }
@@ -723,6 +1005,10 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Load persisted config (disabled folders) and build the working set.
+  const cfg = loadConfig();
+  const disabled = new Set(cfg.disabledFolders);
+
   // Use a line reader (terminal:false) for the y/N setup prompts; this works
   // uniformly for TTY and piped stdin.
   const rlInterface = readline.createInterface({
@@ -740,7 +1026,7 @@ async function main(): Promise<void> {
       rlInterface.close(); // hand stdin to the keypress loop
     } else {
       usedFallback = true;
-      await runFallback(rl, skills, target, source);
+      await runFallback(rl, skills, target, source, cfg, disabled);
       rlInterface.close();
     }
   } catch (e) {
@@ -749,7 +1035,7 @@ async function main(): Promise<void> {
   }
 
   if (!usedFallback) {
-    await runInteractive(skills, target, args.wrap, source);
+    await runInteractive(skills, target, args.wrap, source, cfg, disabled);
   }
 
   console.log("Done.");
